@@ -1,3 +1,5 @@
+//Το Project αυτό έτρεχε σε ένα παλιό online IDE του CS50 course
+
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
