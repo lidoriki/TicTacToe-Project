@@ -1,5 +1,3 @@
-//Το Project αυτό έτρεχε σε ένα παλιό online IDE του CS50 course
-
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -20,6 +18,17 @@ int repeat = 3;//                                                        place[6
 //                                                                                |          |
 //                                                                                |          |
 int game[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+// big tables live in global memory: as locals in main they overflowed the 1MB stack on Windows
+#define PLACES 9
+#define MAXC 19683 // 3^9
+static int combination[PLACES][MAXC][PLACES];
+// two tables: [0] = games where you (o) start, [1] = games where the computer (x) starts
+// (with one table that assumed o always starts, x's opening moves got positive scores)
+static float values[2][PLACES][MAXC];
+static int futures[2][PLACES][MAXC];
+int first = 1; // who made the first move of the game: opponent (o) or player (x)
+// text shown to the right of the board: the score of the move that was just made
+char last_move[64] = "";
 
 //functions
 int combinations(int i, int j);
@@ -33,17 +42,19 @@ int next(int combo[], int p, int r, int turn, int roundd);
 int play(int g[]);
 int choose(float value[]);
 int print(void);
+float move_score(int g[], int combo_row[], float value[][MAXC]);
+int set_last_move(int who, int spot, float s);
 
 
 int main(void){
-    setvbuf(stdout, NULL, _IONBF, 0);
     printf("loading game...\n");
-    fflush(stdout);
-    int c = pow(numbers, places);
-    int combination[places][c][places];
-    float value[places][c];
+    int c = 1;
+    for(int pw = 0; pw < places; pw++) c *= numbers; // integer 3^9 (pow() can round down to 19682)
     int combo_row[places];
     for(int zer = 0; zer < places; zer++) combo_row[zer] = 0;
+
+
+    
 
     for(int r = 0; r < places; r++){//                                                                     (1) generating all possible outcomes of the game
         for(int k = 0; k < c; k++){
@@ -54,15 +65,20 @@ int main(void){
             }
             if(accurate(Combo) <= 1 && row(Combo) == r){
                 for(int e = 0; e < places; e++) combination[r][combo_row[r]][e] = Combo[e];
-                value[r][combo_row[r]] = accurate(combination[r][combo_row[r]]) * 1000; //starting value of 1000(o wins), -1000(x wins) or 0(no wins)  *1000 for more accuracy
+                values[0][r][combo_row[r]] = values[1][r][combo_row[r]] = accurate(combination[r][combo_row[r]]) * 1000; //starting value of 1000(o wins), -1000(x wins) or 0(no wins)  *1000 for more accuracy
                 combo_row[r]++;
             }
         }
     }//to see all combinations and their values, assign now = 1
-    int now = 1;           //                                                                x| |o
-    int future[places][c]; // the future feature anables it to recognise a dead end  f.e     _|x|_  (dead end)
+    int now = 0;           //                                                                x| |o
+    //                     // the future feature anables it to recognise a dead end  f.e     _|x|_  (dead end)
     int countf = 0;        //                                                                o| |o
     int yes = 0;
+    for(int t = 0; t < 2; t++){ // t = 0: o starts, t = 1: x starts
+    first = (t == 0) ? opponent : player;
+    int startround = t; // passed to next() as roundd so that on equal counts the starter moves
+    float (*value)[MAXC] = values[t];
+    int (*future)[MAXC] = futures[t];
                             //                                                                             (2) giving a value to each possible outcome, based on what it can lead to
     for(int p = places - 2; p >= 0; p--){ // starts from the second last row and goes backwards
         for(int l = 0; l < combo_row[p]; l++){
@@ -72,7 +88,7 @@ int main(void){
                 for(int w = 0; w < places - p - 1; w++){
                     int combo[places];
                     for(int o = 0; o < places; o++){
-                        combo[o] = next(combination[p][l], o, w, 0, 0);
+                        combo[o] = next(combination[p][l], o, w, 0, startround);
                     }
                     for(int y = 0; y < combo_row[p + 1]; y++){
                         int s = 0, zero = 0;
@@ -112,13 +128,16 @@ int main(void){
             if(now == 1) printf("        %f \n", value[p][l]);
         }
     }
+    } // end of the two tables
 
     int score[2] = {0, 0};
     int roundd = 0;//                                                    (3) while playing, it chooses the value closer to -1000 (computer is x) or 1000 (computer is o)
     while(1){
         for(int f = 0; f < places; f++) game[f] = 0;
+        last_move[0] = '\0'; // new game: no move to show yet
         int turn = 0;
         int pl[places];
+        float (*value)[MAXC] = values[division_int(roundd, 2)]; // even round: you start, odd round: computer starts
         while(accurate(game) == 0 && row(game) + 1 != places){
             now = 0;
             print();
@@ -131,6 +150,7 @@ int main(void){
                 }
                 while(x < 1 || x > 9 || game[x - 1] != 0);
                 game[x - 1] = opponent;
+                set_last_move(opponent, x - 1, move_score(game, combo_row, value));
             }
             else{
 
@@ -152,7 +172,12 @@ int main(void){
                     }
 
                 }
+                int before[places];
+                for(int b = 0; b < places; b++) before[b] = game[b];
                 choose(val);
+                for(int b = 0; b < places; b++){
+                    if(before[b] != game[b]) set_last_move(player, b, move_score(game, combo_row, value));
+                }
             }
             turn++;
         }
@@ -300,7 +325,8 @@ int who_plays(int combo[]){
     }
 
     if(nx < no) return player;
-    else return opponent;
+    else if(no < nx) return opponent;
+    else return first; // equal counts: whoever started the game moves
 }
 
 int row(int combo[]){
@@ -382,7 +408,10 @@ int print(void){
         for(int j = 0; j < X; j++){
             for(int l = 0; l < 6; l++){
                 if(l == 5 && j != X - 1) printf("|");
-                else if(l == 5 && j == X - 1) printf("\n");
+                else if(l == 5 && j == X - 1){
+                    if(i == 4 && last_move[0] != '\0') printf("        %s", last_move); // middle row of the board
+                    printf("\n");
+                }
                 else if(l == 2 && division_int(i - 1, 3) == 0){
                     if(game[xox] == 1) printf("O");
                     else if(game[xox] == -1) printf("X");
@@ -396,5 +425,24 @@ int print(void){
 
     }
     printf("\n");
+    return 0;
+}
+
+// finds the board g in the precomputed tables and returns its value (the score of the move that led to it)
+// the closer to 1000, the better for o (you); the closer to -1000, the better for x (computer)
+float move_score(int g[], int combo_row[], float value[][MAXC]){
+    int r = row(g);
+    if(r < 0) return 0;
+    for(int v = 0; v < combo_row[r]; v++){
+        int same = 0;
+        for(int q = 0; q < places; q++) if(g[q] == combination[r][v][q]) same++;
+        if(same == places) return value[r][v];
+    }
+    return 0;
+}
+
+int set_last_move(int who, int spot, float s){
+    if(who == opponent) sprintf(last_move, "you (O) played %d   score: %.1f", spot + 1, s);
+    else sprintf(last_move, "computer (X) played %d   score: %.1f", spot + 1, s);
     return 0;
 }
